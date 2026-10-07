@@ -80,17 +80,34 @@ export default defineConfig(() => {
                 });
               });
 
-              const maxCols = Math.max(
-                json.table?.cols ? json.table.cols.length : 0,
-                ...rawRows.map((r: any) => r.length),
-                1
-              );
+              // Find the last column index that actually contains content across all rows
+              let maxContentCol = 0;
+              for (const row of rawRows) {
+                for (let c = row.length - 1; c >= 0; c--) {
+                  if (row[c] && row[c].trim() !== '') {
+                    if (c + 1 > maxContentCol) {
+                      maxContentCol = c + 1;
+                    }
+                    break;
+                  }
+                }
+              }
 
-              const rows = rawRows.map((r: any) =>
-                r.length < maxCols ? [...r, ...Array(maxCols - r.length).fill('')] : r
-              );
+              // Determine effective columns:
+              // TEMPLATES is strictly 6 columns (A through F).
+              // Other sheets use the last column that actually contains content.
+              const isTemplate = sheetName.toUpperCase().includes('TEMPLATE');
+              const effectiveCols = isTemplate ? 6 : Math.max(maxContentCol, 3);
 
-              const columns = Array.from({ length: maxCols }, (_, idx) =>
+              const rows = rawRows.map((r: any) => {
+                const trimmed = r.slice(0, effectiveCols);
+                if (trimmed.length < effectiveCols) {
+                  return [...trimmed, ...Array(effectiveCols - trimmed.length).fill('')];
+                }
+                return trimmed;
+              });
+
+              const columns = Array.from({ length: effectiveCols }, (_, idx) =>
                 String.fromCharCode(65 + idx)
               );
 

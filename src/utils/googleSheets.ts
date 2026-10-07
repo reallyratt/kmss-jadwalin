@@ -104,30 +104,40 @@ export function fetchSheetTabViaJsonp(sheetId: string, sheetName: string): Promi
           });
         });
 
-        // Calculate maximum column count across all rows and table.cols
-        const maxCols = Math.max(
-          table.cols ? table.cols.length : 0,
-          ...rawRows.map((r) => r.length),
-          1
-        );
-
-        // Pad all rows to maxCols
-        const rows = rawRows.map((r) => {
-          if (r.length < maxCols) {
-            return [...r, ...Array(maxCols - r.length).fill('')];
+        // Find the last column index that actually contains content across all rows
+        let maxContentCol = 0;
+        for (const row of rawRows) {
+          for (let c = row.length - 1; c >= 0; c--) {
+            if (row[c] && row[c].trim() !== '') {
+              if (c + 1 > maxContentCol) {
+                maxContentCol = c + 1;
+              }
+              break;
+            }
           }
-          return r;
+        }
+
+        // Determine effective columns:
+        // TEMPLATES is strictly 6 columns (A through F).
+        // Other sheets use the last column that actually contains content.
+        const isTemplate = sheetName.toUpperCase().includes('TEMPLATE');
+        const effectiveCols = isTemplate ? 6 : Math.max(maxContentCol, 3);
+
+        // Trim and pad all rows to effectiveCols
+        const rows = rawRows.map((r) => {
+          const trimmed = r.slice(0, effectiveCols);
+          if (trimmed.length < effectiveCols) {
+            return [...trimmed, ...Array(effectiveCols - trimmed.length).fill('')];
+          }
+          return trimmed;
         });
 
         // Determine column labels (A, B, C, D...)
-        const columns = Array.from({ length: maxCols }, (_, idx) => {
-          const col = table.cols && table.cols[idx];
-          return col && col.label && col.label.trim() ? col.label.trim() : String.fromCharCode(65 + idx);
-        });
+        const columns = Array.from({ length: effectiveCols }, (_, idx) => String.fromCharCode(65 + idx));
 
         resolve({
           sheetName,
-          columns: columns.length > 0 ? columns : ['A', 'B', 'C'],
+          columns: columns.length > 0 ? columns : ['A', 'B', 'C', 'D', 'E', 'F'],
           rows,
         });
       } catch (err) {
@@ -265,17 +275,31 @@ export async function fetchSheetTabByGid(
           });
         });
 
-        const maxCols = Math.max(
-          data.table.cols ? data.table.cols.length : 0,
-          ...rawRows.map((r) => r.length),
-          1
-        );
+        // Find last column with content
+        let maxContentCol = 0;
+        for (const row of rawRows) {
+          for (let c = row.length - 1; c >= 0; c--) {
+            if (row[c] && row[c].trim() !== '') {
+              if (c + 1 > maxContentCol) {
+                maxContentCol = c + 1;
+              }
+              break;
+            }
+          }
+        }
 
-        const rows = rawRows.map((r) =>
-          r.length < maxCols ? [...r, ...Array(maxCols - r.length).fill('')] : r
-        );
+        const isTemplate = sheetName.toUpperCase().includes('TEMPLATE');
+        const effectiveCols = isTemplate ? 6 : Math.max(maxContentCol, 3);
 
-        const columns = Array.from({ length: maxCols }, (_, idx) => String.fromCharCode(65 + idx));
+        const rows = rawRows.map((r) => {
+          const trimmed = r.slice(0, effectiveCols);
+          if (trimmed.length < effectiveCols) {
+            return [...trimmed, ...Array(effectiveCols - trimmed.length).fill('')];
+          }
+          return trimmed;
+        });
+
+        const columns = Array.from({ length: effectiveCols }, (_, idx) => String.fromCharCode(65 + idx));
         resolve({ sheetName, columns, rows });
       } catch (err) {
         resolve({ sheetName, columns: ['A', 'B', 'C'], rows: [], error: (err as Error).message });
