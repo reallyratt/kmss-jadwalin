@@ -111,10 +111,90 @@ export default defineConfig(() => {
                 String.fromCharCode(65 + idx)
               );
 
+              // Dynamically extract yellow cells (Live Mass) from the Google Spreadsheet XLSX
+              let yellowCells: string[] = ['B6', 'C6', 'B13', 'C13', 'E13'];
+              let liveSlots: string[] = ['SENIN_05:30', 'JUMAT_05:30', 'SABTU_17:00', 'MINGGU_06:00', 'MINGGU_16:30'];
+              let liveColumns = { harian: [1, 2], mingguan: [1, 2, 4] };
+
+              if (sheetId) {
+                try {
+                  const { execSync } = await import('child_process');
+                  const fs = await import('fs');
+                  const tmpFile = `/tmp/sheet_${sheetId}.xlsx`;
+                  const outDir = `/tmp/unzip_${sheetId}`;
+
+                  execSync(`curl -s -L "https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx" -o "${tmpFile}"`, { timeout: 4000 });
+                  execSync(`rm -rf "${outDir}" && mkdir -p "${outDir}" && unzip -q -o "${tmpFile}" -d "${outDir}"`, { timeout: 3000 });
+
+                  if (fs.existsSync(`${outDir}/xl/styles.xml`) && fs.existsSync(`${outDir}/xl/worksheets/sheet1.xml`)) {
+                    const styles = fs.readFileSync(`${outDir}/xl/styles.xml`, 'utf8');
+                    const fills = styles.match(/<fill>[\s\S]*?<\/fill>/g) || [];
+                    const xfs = (styles.match(/<cellXfs[\s\S]*?<\/cellXfs>/) || [''])[0].match(/<xf [^>]+>/g) || [];
+                    const yellowFillIds = new Set<number>();
+
+                    fills.forEach((f: string, idx: number) => {
+                      if (/rgb=\"FF(FF00|FE00|F9C3|EF08|FFF0|FFD|FFE|FFFF00)/i.test(f) || /rgb=\"(FFFF00|FEF08A|FEF9C3)/i.test(f)) {
+                        yellowFillIds.add(idx);
+                      }
+                    });
+
+                    const sheet1 = fs.readFileSync(`${outDir}/xl/worksheets/sheet1.xml`, 'utf8');
+                    const cells = sheet1.match(/<c [^>]+>(?:<v>[\s\S]*?<\/v>)?<\/c>/g) || [];
+                    const dynamicYellow: string[] = [];
+
+                    cells.forEach((c: string) => {
+                      const ref = (c.match(/r=\"([A-Z0-9]+)\"/) || [])[1];
+                      const s = parseInt((c.match(/s=\"(\d+)\"/) || [])[1] || '0', 10);
+                      const xf = xfs[s] || '';
+                      const fillId = parseInt((xf.match(/fillId=\"(\d+)\"/) || [])[1] || '0', 10);
+                      if (yellowFillIds.has(fillId) && ref) {
+                        dynamicYellow.push(ref);
+                      }
+                    });
+
+                    if (dynamicYellow.length > 0) {
+                      yellowCells = dynamicYellow;
+                      const dynamicHarianCols = new Set<number>();
+                      const dynamicMingguanCols = new Set<number>();
+                      const dynamicSlots: string[] = [];
+
+                      dynamicYellow.forEach((cellRef) => {
+                        const m = cellRef.match(/^([A-Z]+)(\d+)$/);
+                        if (!m) return;
+                        const colIdx = m[1].charCodeAt(0) - 65; // 'B' -> 1, 'C' -> 2
+                        const rowNum = parseInt(m[2], 10);
+                        if (rowNum <= 8) {
+                          dynamicHarianCols.add(colIdx);
+                          if (colIdx === 1) dynamicSlots.push('SENIN_05:30');
+                          if (colIdx === 2) dynamicSlots.push('JUMAT_05:30');
+                        } else {
+                          dynamicMingguanCols.add(colIdx);
+                          if (colIdx === 1) dynamicSlots.push('SABTU_17:00');
+                          if (colIdx === 2) dynamicSlots.push('MINGGU_06:00');
+                          if (colIdx === 3) dynamicSlots.push('MINGGU_08:00');
+                          if (colIdx === 4) dynamicSlots.push('MINGGU_16:30');
+                          if (colIdx === 5) dynamicSlots.push('MINGGU_18:30');
+                        }
+                      });
+
+                      liveColumns = {
+                        harian: Array.from(dynamicHarianCols),
+                        mingguan: Array.from(dynamicMingguanCols),
+                      };
+                      if (dynamicSlots.length > 0) {
+                        liveSlots = Array.from(new Set(dynamicSlots));
+                      }
+                    }
+                  }
+                } catch {
+                  // Fallback safely to defaults
+                }
+              }
+
               res.statusCode = 200;
               res.setHeader('Content-Type', 'application/json');
               res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-              res.end(JSON.stringify({ sheetName, columns, rows }));
+              res.end(JSON.stringify({ sheetName, columns, rows, yellowCells, liveSlots, liveColumns }));
             } catch (err: any) {
               res.statusCode = 500;
               res.setHeader('Content-Type', 'application/json');

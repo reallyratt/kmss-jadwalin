@@ -3,6 +3,72 @@ export interface SheetTable {
   columns: string[];
   rows: string[][];
   error?: string;
+  yellowCells?: string[];
+  liveSlots?: string[];
+  liveColumns?: { harian: number[]; mingguan: number[] };
+}
+
+/**
+ * Normalizes time string (e.g., '5:30' -> '05:30')
+ */
+export function normalizeTimeFormat(timeStr: string): string {
+  if (!timeStr) return '';
+  const clean = timeStr.trim().replace(/^Date\([^)]+\)/i, '').trim();
+  const match = clean.match(/(\d{1,2})[:.](\d{2})/);
+  if (match) {
+    const hours = match[1].padStart(2, '0');
+    const minutes = match[2];
+    return `${hours}:${minutes}`;
+  }
+  return clean;
+}
+
+/**
+ * Determine if a slot or column in the schedule is a Live Mass (marked yellow in template)
+ */
+export function isSlotLiveMass(
+  section: 'HARIAN' | 'MINGGUAN',
+  colIdx: number, // 1-based (1..5)
+  templatesSheet?: SheetTable,
+  day?: string,
+  time?: string
+): boolean {
+  // 1. Check liveSlots by day and normalized time if provided
+  if (day && time && templatesSheet?.liveSlots && templatesSheet.liveSlots.length > 0) {
+    const key = `${day.toUpperCase()}_${normalizeTimeFormat(time)}`;
+    if (templatesSheet.liveSlots.includes(key)) return true;
+  }
+
+  // 2. Check liveColumns if present
+  if (templatesSheet?.liveColumns) {
+    const cols = section === 'HARIAN' ? templatesSheet.liveColumns.harian : templatesSheet.liveColumns.mingguan;
+    if (cols && cols.includes(colIdx)) return true;
+  }
+
+  // 3. Check yellowCells directly (e.g. ['B6', 'C6', 'B13', 'C13', 'E13'])
+  if (templatesSheet?.yellowCells && templatesSheet.yellowCells.length > 0) {
+    const colLetter = String.fromCharCode(65 + colIdx); // 1->'B', 2->'C', 3->'D', 4->'E', 5->'F'
+    const isColYellow = templatesSheet.yellowCells.some((cellRef) => {
+      const match = cellRef.match(/^([A-Z]+)(\d+)$/);
+      if (!match) return false;
+      const refCol = match[1];
+      const refRow = parseInt(match[2], 10);
+      if (refCol !== colLetter) return false;
+      if (section === 'HARIAN' && refRow <= 8) return true;
+      if (section === 'MINGGUAN' && refRow > 8) return true;
+      return false;
+    });
+    if (isColYellow) return true;
+  }
+
+  // 4. Default fallback matching source template:
+  // Harian: Col 1 (SENIN 05:30) & Col 2 (JUMAT 05:30)
+  // Mingguan: Col 1 (SABTU 17:00), Col 2 (MINGGU 06:00), Col 4 (MINGGU 16:30)
+  if (section === 'HARIAN') {
+    return colIdx === 1 || colIdx === 2;
+  } else {
+    return colIdx === 1 || colIdx === 2 || colIdx === 4;
+  }
 }
 
 /**
@@ -366,3 +432,72 @@ export async function fetchAllRequiredSheets(
 
   return results;
 }
+
+export const DEFAULT_SPREADSHEET_URL =
+  'https://docs.google.com/spreadsheets/d/1uZxHI8k-Oqjh1qLVEMTsMt6L-Qpv6LqbNzjW20HH2r8/edit?usp=sharing';
+
+export const initialSheets: { [key: string]: SheetTable } = {
+  TEMPLATES: {
+    sheetName: 'TEMPLATES',
+    columns: ['A', 'B', 'C', 'D', 'E', 'F'],
+    yellowCells: ['B6', 'C6', 'B13', 'C13', 'E13'],
+    liveSlots: ['SENIN_05:30', 'JUMAT_05:30', 'SABTU_17:00', 'MINGGU_06:00', 'MINGGU_16:30'],
+    liveColumns: { harian: [1, 2], mingguan: [1, 2, 4] },
+    rows: [
+      ['JADWAL PETUGAS PERIODE {TGLPERD}', '', '', '', '', ''],
+      ['', '', '', '', '', ''],
+      ['', 'HARIAN', '', '', '', ''],
+      ['TANGGAL', '{mon}', '{fri}', '', '', ''],
+      ['HARI', 'SENIN', 'JUMAT', '', '', ''],
+      ['PUKUL', '05:30', '05:30', '', '', ''],
+      ['PJ', '{ptgs}', '{ptgs}', '', '', ''],
+      ['ANGGOTA', '{ptgs}', '{ptgs}', '', '', ''],
+      ['', '', '', '', '', ''],
+      ['', 'MINGGUAN', '', '', '', ''],
+      ['TANGGAL', '{sat}', '{sun}', '', '', ''],
+      ['HARI', 'SABTU', 'MINGGU', '', '', ''],
+      ['PUKUL', '17:00', '06:00', '08:00', '16:30', '18:30'],
+      ['PJ', '{ptgs}', '{ptgs}', '{ptgs}', '{ptgs}', '{ptgs}'],
+      ['ANGGOTA', '{ptgs}', '{ptgs}', '{ptgs}', '{ptgs}', '{ptgs}'],
+    ],
+  },
+  DATASET: {
+    sheetName: 'DATASET',
+    columns: ['A', 'B', 'C', 'D', 'E', 'F'],
+    rows: [
+      ['', 'NAMA', 'POSISI', 'KONDISI', 'STATUS', 'EXPERTISE'],
+      ['1', 'CAY', 'PJABLE', 'SERING BOLONG PAGI', 'TUGASABLE', 'JACK OF ALL TRADES'],
+      ['2', 'CISCA', 'SIDEKICK', 'MEMBER NORMAL', 'IZIN', 'CRD'],
+      ['3', 'WINIH', 'SIDEKICK', 'SERING BOLONG', 'HIATUS', 'SO'],
+      ['4', 'SATRIA', 'PJABLE', 'MEMBER NORMAL', 'TUGASABLE', 'CAM'],
+      ['5', 'GALAN', 'PJABLE', 'MEMBER NORMAL', 'TUGASABLE', 'RUNNER'],
+      ['6', 'NIKO', 'PJABLE', 'MEMBER REDFLAG', 'TUGASABLE', 'JACK OF ALL TRADES'],
+      ['7', 'KAREL', 'SIDEKICK', 'SERING BOLONG', 'IZIN', 'CRD'],
+      ['8', 'BAGUS', 'SIDEKICK', 'MEMBER NORMAL', 'TUGASABLE', 'CRD'],
+      ['9', 'ARYA', 'PJABLE', 'MEMBER REDFLAG', 'IZIN', 'JACK OF ALL TRADES'],
+      ['10', 'DISTYA', 'TRAINEE', 'SERING BOLONG PAGI', 'TUGASABLE', 'CAM'],
+    ],
+  },
+  CONFIGURATION: {
+    sheetName: 'CONFIGURATION',
+    columns: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'],
+    rows: [
+      ['JADWAL PETUGAS KOMSOS IZIN', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['JENIS', 'MISA HARIAN', '', '', '', '', '', '', 'MISA MINGGUAN', '', '', '', ''],
+      ['HARI', 'SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'JUMAT PERTAMA', 'SABTU', 'SABTU', 'MINGGU', 'MINGGU', 'MINGGU', 'MINGGU'],
+      ['PUKUL', '5:30', '5:30', '5:30', '5:30', '5:30', '18:00', '5:30', '17:00', '6:00', '8:00', '16:30', '18:30'],
+      ['ANGGOTA', 'galan', '', '', '', '', 'galan', '/galan', '', '', '', '', ''],
+    ],
+  },
+  PARAMETER: {
+    sheetName: 'PARAMETER',
+    columns: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'],
+    rows: [
+      ['JADWAL PETUGAS KOMSOS MINGGU LALU', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['JENIS', 'MISA HARIAN', '', '', '', '', '', '', 'MISA MINGGUAN', '', '', '', ''],
+      ['HARI', 'SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'JUMAT PERTAMA', 'SABTU', 'SABTU', 'MINGGU', 'MINGGU', 'MINGGU', 'MINGGU'],
+      ['PUKUL', '5:30', '5:30', '5:30', '5:30', '5:30', '18:00', '5:30', '17:00', '6:00', '8:00', '16:30', '18:30'],
+      ['ANGGOTA', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ],
+  },
+};

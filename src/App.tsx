@@ -1,13 +1,82 @@
 import React from 'react';
-import { FileText, Wrench, Settings, ArrowRight } from 'lucide-react';
+import { FileText, Wrench, Settings, ArrowRight, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import DatasetFilesView from './components/DatasetFilesView';
 import GenerateScheduleView from './components/GenerateScheduleView';
+import { 
+  DEFAULT_SPREADSHEET_URL, 
+  initialSheets, 
+  SheetTable, 
+  extractSpreadsheetId, 
+  fetchAllRequiredSheets 
+} from './utils/googleSheets';
 
 type Page = 'menu' | 'dataset' | 'generate';
 
 export default function App() {
   const [currentPage, setCurrentPage] = React.useState<Page>('menu');
+  const [showMenuSettings, setShowMenuSettings] = React.useState<boolean>(false);
+
+  // Shared Sheet state
+  const [sheetUrl, setSheetUrl] = React.useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('jadwalin_spreadsheet_url');
+      return saved !== null && saved !== '' ? saved : DEFAULT_SPREADSHEET_URL;
+    } catch {
+      return DEFAULT_SPREADSHEET_URL;
+    }
+  });
+
+  const [sheetsData, setSheetsData] = React.useState<{ [key: string]: SheetTable }>(initialSheets);
+
+  // Background sync on app load so dataset is instantly ready
+  React.useEffect(() => {
+    if (!sheetUrl) return;
+    const id = extractSpreadsheetId(sheetUrl);
+    if (!id) return;
+
+    fetchAllRequiredSheets(id).then((liveData) => {
+      setSheetsData((prev) => {
+        const updated = { ...prev };
+        for (const key of ['TEMPLATES', 'DATASET', 'CONFIGURATION', 'PARAMETER']) {
+          if (liveData[key] && liveData[key].rows && liveData[key].rows.length > 0) {
+            const incoming = liveData[key];
+            if (key === 'TEMPLATES') {
+              updated[key] = {
+                ...incoming,
+                columns: ['A', 'B', 'C', 'D', 'E', 'F'],
+                yellowCells: incoming.yellowCells || prev[key]?.yellowCells,
+                liveSlots: incoming.liveSlots || prev[key]?.liveSlots,
+                liveColumns: incoming.liveColumns || prev[key]?.liveColumns,
+                rows: incoming.rows.map((r) => {
+                  const trimmed = r.slice(0, 6);
+                  return trimmed.length < 6
+                    ? [...trimmed, ...Array(6 - trimmed.length).fill('')]
+                    : trimmed;
+                }),
+              };
+            } else if (key === 'CONFIGURATION' || key === 'PARAMETER') {
+              const maxCols = Math.max(incoming.columns.length, 13);
+              const cols = Array.from({ length: maxCols }, (_, idx) => String.fromCharCode(65 + idx));
+              updated[key] = {
+                ...incoming,
+                columns: cols,
+                rows: incoming.rows.map((r) => {
+                  const trimmed = r.slice(0, maxCols);
+                  return trimmed.length < maxCols
+                    ? [...trimmed, ...Array(maxCols - trimmed.length).fill('')]
+                    : trimmed;
+                }),
+              };
+            } else {
+              updated[key] = incoming;
+            }
+          }
+        }
+        return updated;
+      });
+    }).catch(() => {});
+  }, [sheetUrl]);
 
   // Basic smooth fade in & fade out animation for fast, lag-free transitions
   const pageVariants = {
@@ -48,9 +117,9 @@ export default function App() {
             <div className="w-full max-w-5xl mx-auto flex items-center justify-end pt-1 mb-4">
               <button
                 type="button"
-                onClick={() => {}}
+                onClick={() => setShowMenuSettings(true)}
                 aria-label="Settings"
-                title="Settings"
+                title="Settings & Aturan Penjadwalan"
                 className="w-10 h-10 sm:w-11 sm:h-11 bg-[#1E1E1E] text-white hover:bg-black transition-colors flex items-center justify-center shrink-0 border border-[#1E1E1E] shadow-[3px_3px_0px_0px_#1E1E1E] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none cursor-pointer"
               >
                 <Settings className="w-5 h-5 sm:w-6 sm:h-6" strokeWidth={2.2} />
@@ -138,7 +207,13 @@ export default function App() {
             exit="exit"
             className="w-full min-h-screen"
           >
-            <DatasetFilesView onBack={() => setCurrentPage('menu')} />
+            <DatasetFilesView 
+              onBack={() => setCurrentPage('menu')} 
+              sheetUrl={sheetUrl}
+              setSheetUrl={setSheetUrl}
+              sheetsData={sheetsData}
+              setSheetsData={setSheetsData}
+            />
           </motion.div>
         )}
 
@@ -152,11 +227,75 @@ export default function App() {
             exit="exit"
             className="w-full min-h-screen"
           >
-            <GenerateScheduleView onBack={() => setCurrentPage('menu')} />
+            <GenerateScheduleView 
+              onBack={() => setCurrentPage('menu')} 
+              sheetUrl={sheetUrl}
+              sheetsData={sheetsData}
+              onNavigateToDataset={() => setCurrentPage('dataset')}
+            />
           </motion.div>
         )}
 
       </AnimatePresence>
+
+      {/* Settings Modal (Accessible from Menu Top-Right Button) */}
+      <AnimatePresence>
+        {showMenuSettings && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-lg bg-[#F6F5F1] border-3 border-[#1E1E1E] p-6 shadow-[8px_8px_0px_0px_#1E1E1E] flex flex-col gap-4"
+            >
+              <div className="flex items-center justify-between border-b-2 border-[#1E1E1E] pb-3">
+                <div className="flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-[#1E1E1E]" />
+                  <h3 className="font-black text-base uppercase text-[#1E1E1E]">
+                    PENGATURAN & INFORMASI SISTEM
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMenuSettings(false)}
+                  className="w-7 h-7 bg-[#1E1E1E] text-white flex items-center justify-center hover:bg-black cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-3 text-xs text-[#333]">
+                <div className="bg-white p-3 border border-[#1E1E1E]">
+                  <span className="font-black uppercase text-[#1E1E1E] block mb-1">
+                    JadwalIN Automated Scheduler v0.5 Beta
+                  </span>
+                  <p className="leading-relaxed">
+                    Sistem penjadwalan otomatis menggunakan kode komputasi deterministik (bukan AI), mengoptimalkan rotasi petugas gereja sesuai aturan posisi, kondisi, status, dan parameter istirahat.
+                  </p>
+                </div>
+
+                <div className="bg-white p-3 border border-[#1E1E1E]">
+                  <span className="font-black uppercase text-[#1E1E1E] block mb-1">
+                    Sumber Data Google Sheets
+                  </span>
+                  <p className="break-all font-mono text-[11px] text-[#666]">
+                    {sheetUrl}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowMenuSettings(false)}
+                className="w-full bg-[#1E1E1E] text-white font-bold py-2.5 text-xs uppercase shadow-[2px_2px_0px_0px_#1E1E1E] cursor-pointer"
+              >
+                TUTUP
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }

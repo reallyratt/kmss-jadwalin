@@ -11,86 +11,33 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   extractSpreadsheetId, 
   fetchAllRequiredSheets, 
-  SheetTable 
+  SheetTable,
+  DEFAULT_SPREADSHEET_URL,
+  initialSheets,
+  isSlotLiveMass
 } from '../utils/googleSheets';
 
 interface DatasetFilesViewProps {
   onBack: () => void;
+  sheetsData?: { [key: string]: SheetTable };
+  setSheetsData?: React.Dispatch<React.SetStateAction<{ [key: string]: SheetTable }>>;
+  sheetUrl?: string;
+  setSheetUrl?: (url: string) => void;
 }
-
-const DEFAULT_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1uZxHI8k-Oqjh1qLVEMTsMt6L-Qpv6LqbNzjW20HH2r8/edit?usp=sharing';
-
-// Initial sheets
-const initialSheets: { [key: string]: SheetTable } = {
-  TEMPLATES: {
-    sheetName: 'TEMPLATES',
-    columns: ['A', 'B', 'C', 'D', 'E', 'F'],
-    rows: [
-      ['JADWAL PETUGAS PERIODE {TGLPERD}', '', '', '', '', ''],
-      ['', '', '', '', '', ''],
-      ['', 'HARIAN', '', '', '', ''],
-      ['TANGGAL', '{MON}', '{FRI}', '', '', ''],
-      ['HARI', 'SENIN', 'JUMAT', '', '', ''],
-      ['PUKUL', '05:30', '05:30', '', '', ''],
-      ['PJ', '{PJA}', '{PJB}', '', '', ''],
-      ['ANGGOTA', '{ANGA}', '{ANGB}', '', '', ''],
-      ['', '', '', '', '', ''],
-      ['', 'MINGGUAN', '', '', '', ''],
-      ['TANGGAL', '{SAT}', '{SUN}', '', '', ''],
-      ['HARI', 'SABTU', 'MINGGU', '', '', ''],
-      ['PUKUL', '17:00', '06:00', '08:00', '16:30', '18:30'],
-      ['PJ', '{PJC}', '{PJD}', '{PJE}', '{PJF}', '{PJG}'],
-      ['ANGGOTA', '{ANGC}', '{ANGD}', '{ANGE}', '{ANGF}', '{ANGG}'],
-    ],
-  },
-  DATASET: {
-    sheetName: 'DATASET',
-    columns: ['A', 'B', 'C', 'D', 'E', 'F'],
-    rows: [
-      ['', 'NAMA', 'POSISI', 'KONDISI', 'STATUS', 'EXPERTISE'],
-      ['1', 'CAY', 'PJABLE', 'SERING BOLONG PAGI', 'TUGASABLE', 'JACK OF ALL TRADES'],
-      ['2', 'CISCA', 'SIDEKICK', 'MEMBER NORMAL', 'IZIN', 'CRD'],
-      ['3', 'WINIH', 'SIDEKICK', 'SERING BOLONG', 'HIATUS', 'SO'],
-      ['4', 'SATRIA', 'PJABLE', 'MEMBER NORMAL', 'TUGASABLE', 'CAM'],
-      ['5', 'GALAN', 'PJABLE', 'MEMBER NORMAL', 'HIATUS', 'RUNNER'],
-    ],
-  },
-  CONFIGURATION: {
-    sheetName: 'CONFIGURATION',
-    columns: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'],
-    rows: [
-      ['JADWAL PETUGAS KOMSOS IZIN', '', '', '', '', '', '', '', '', '', '', '', ''],
-      ['JENIS', 'MISA HARIAN', '', '', '', '', '', '', 'MISA MINGGUAN', '', '', '', ''],
-      ['HARI', 'SENIN', '', '', '', '', '', '', 'SABTU', '', '', '', ''],
-      ['PUKUL', '5:30', '5:30', '5:30', '5:30', '5:30', '18:00', '5:30', '17:00', '6:00', '8:00', '16:30', '18:30'],
-      ['ANGGOTA', '', '', '', '', '', '', '', '', '', '', '', ''],
-    ],
-  },
-  PARAMETER: {
-    sheetName: 'PARAMETER',
-    columns: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'],
-    rows: [
-      ['JADWAL PETUGAS KOMSOS MINGGU LALU', '', '', '', '', '', '', '', '', '', '', '', ''],
-      ['JENIS', 'MISA HARIAN', '', '', '', '', '', '', 'MISA MINGGUAN', '', '', '', ''],
-      ['HARI', 'SENIN', '', '', '', '', '', '', 'SABTU', '', '', '', ''],
-      ['PUKUL', '5:30', '5:30', '5:30', '5:30', '5:30', '18:00', '5:30', '17:00', '6:00', '8:00', '16:30', '18:30'],
-      ['ANGGOTA', '', '', '', '', '', '', '', '', '', '', '', ''],
-    ],
-  },
-};
 
 /**
  * Specialized renderer for TEMPLATES sheet:
  * Handles exact merged banners (Title, Harian, Mingguan, Minggu 4 slots)
  * while keeping all slot columns perfectly aligned to columns A through F.
  */
-function renderTemplateRowCells(row: string[]) {
+function renderTemplateRowCells(row: string[], rIdx?: number, allRows?: string[][], sheet?: SheetTable) {
   // Ensure exactly 6 cells for columns A, B, C, D, E, F
   const clean: string[] = Array.from({ length: 6 }, (_, i) =>
     row[i] !== undefined && row[i] !== null ? String(row[i]).trim() : ''
   );
   const firstVal = clean.find((v) => v !== '') || '';
   const nonEmptyCount = clean.filter((v) => v !== '').length;
+  const rowLabel = clean[0]?.toUpperCase() || '';
 
   // 1. Title row: "JADWAL PETUGAS..." (Merged across all 6 columns A through F)
   if (firstVal.toUpperCase().includes('JADWAL') || firstVal.toUpperCase().includes('PERIODE')) {
@@ -158,23 +105,27 @@ function renderTemplateRowCells(row: string[]) {
     );
   }
 
+  // Determine section (HARIAN vs MINGGUAN)
+  const mingguanIdx = allRows ? allRows.findIndex((r) => r.some((v) => String(v).toUpperCase().includes('MINGGUAN'))) : -1;
+  const isMingguanSection = mingguanIdx !== -1 && rIdx !== undefined ? rIdx > mingguanIdx : clean.some((v) => v.toUpperCase().includes('SUN') || v.toUpperCase().includes('MINGGU'));
+
   // 5. Mingguan TANGGAL row:
-  // Col A: TANGGAL, Col B: {SAT}, Col C through F: {SUN} (colSpan=4)
   if (
-    clean[0]?.toUpperCase() === 'TANGGAL' &&
-    clean.some((v) => v.toUpperCase().includes('SUN') || v.toUpperCase() === '{SUN}')
+    isMingguanSection &&
+    rowLabel === 'TANGGAL'
   ) {
+    const isSatLive = isSlotLiveMass('MINGGUAN', 1, sheet);
     return (
       <>
         <td className="p-2 border-r-2 border-b border-[#E0DCD0] bg-[#F5F3EC] font-black text-center text-[#1E1E1E]">
           TANGGAL
         </td>
-        <td className="p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold bg-[#E3EBDD]/40 text-[#1E1E1E]">
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${isSatLive ? 'font-black bg-[#FEF08A]' : 'font-bold bg-[#FAF9F5]'} text-[#1E1E1E]`}>
           {clean[1] || '{SAT}'}
         </td>
         <td
           colSpan={4}
-          className="p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold bg-[#E3EBDD]/40 text-[#1E1E1E]"
+          className="p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold bg-[#FAF9F5] text-[#1E1E1E]"
         >
           {clean[2] || '{SUN}'}
         </td>
@@ -183,22 +134,29 @@ function renderTemplateRowCells(row: string[]) {
   }
 
   // 6. Mingguan HARI row:
-  // Col A: HARI, Col B: SABTU, Col C through F: MINGGU (colSpan=4)
   if (
-    clean[0]?.toUpperCase() === 'HARI' &&
-    clean.some((v) => v.toUpperCase().includes('MINGGU'))
+    isMingguanSection &&
+    rowLabel === 'HARI'
   ) {
+    const isSatLive = isSlotLiveMass('MINGGUAN', 1, sheet);
     return (
       <>
         <td className="p-2 border-r-2 border-b border-[#E0DCD0] bg-[#F5F3EC] font-black text-center text-[#1E1E1E]">
           HARI
         </td>
-        <td className="p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold text-[#1E1E1E]">
-          {clean[1] || 'SABTU'}
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${isSatLive ? 'font-black bg-[#FEF08A]' : 'font-bold bg-[#FAF9F5]'} text-[#1E1E1E]`}>
+          {isSatLive ? (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <span>{clean[1] || 'SABTU'}</span>
+              <span className="text-[9px] bg-[#EAB308] text-white px-1 py-0.5 rounded-xs font-black tracking-wider uppercase shadow-[1px_1px_0px_0px_#1E1E1E]">LIVE</span>
+            </span>
+          ) : (
+            clean[1] || 'SABTU'
+          )}
         </td>
         <td
           colSpan={4}
-          className="p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold text-[#1E1E1E]"
+          className="p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold bg-[#FAF9F5] text-[#1E1E1E]"
         >
           {clean[2] || 'MINGGU'}
         </td>
@@ -206,25 +164,137 @@ function renderTemplateRowCells(row: string[]) {
     );
   }
 
-  // 7. General rows: Harian slots or Mingguan PUKUL/JAM, PJ, ANGGOTA
+  // 7. HARIAN TANGGAL row:
+  if (!isMingguanSection && rowLabel === 'TANGGAL') {
+    const isLive1 = isSlotLiveMass('HARIAN', 1, sheet);
+    const isLive2 = isSlotLiveMass('HARIAN', 2, sheet);
+    return (
+      <>
+        <td className="p-2 border-r-2 border-b border-[#E0DCD0] bg-[#F5F3EC] font-black text-center text-[#1E1E1E]">
+          TANGGAL
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${isLive1 ? 'font-black bg-[#FEF08A]' : 'font-bold bg-[#FAF9F5]'} text-[#1E1E1E]`}>
+          {clean[1] || '{mon}'}
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${isLive2 ? 'font-black bg-[#FEF08A]' : 'font-bold bg-[#FAF9F5]'} text-[#1E1E1E]`}>
+          {clean[2] || '{fri}'}
+        </td>
+        <td colSpan={3} className="p-2 border-r-2 border-b border-[#E0DCD0] text-center text-neutral-300">
+          ·
+        </td>
+      </>
+    );
+  }
+
+  // 8. HARIAN HARI row:
+  if (!isMingguanSection && rowLabel === 'HARI') {
+    const isLive1 = isSlotLiveMass('HARIAN', 1, sheet);
+    const isLive2 = isSlotLiveMass('HARIAN', 2, sheet);
+    return (
+      <>
+        <td className="p-2 border-r-2 border-b border-[#E0DCD0] bg-[#F5F3EC] font-black text-center text-[#1E1E1E]">
+          HARI
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${isLive1 ? 'font-black bg-[#FEF08A]' : 'font-bold bg-[#FAF9F5]'} text-[#1E1E1E]`}>
+          {isLive1 ? (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <span>{clean[1] || 'SENIN'}</span>
+              <span className="text-[9px] bg-[#EAB308] text-white px-1 py-0.5 rounded-xs font-black tracking-wider uppercase shadow-[1px_1px_0px_0px_#1E1E1E]">LIVE</span>
+            </span>
+          ) : (
+            clean[1] || 'SENIN'
+          )}
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${isLive2 ? 'font-black bg-[#FEF08A]' : 'font-bold bg-[#FAF9F5]'} text-[#1E1E1E]`}>
+          {isLive2 ? (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <span>{clean[2] || 'JUMAT'}</span>
+              <span className="text-[9px] bg-[#EAB308] text-white px-1 py-0.5 rounded-xs font-black tracking-wider uppercase shadow-[1px_1px_0px_0px_#1E1E1E]">LIVE</span>
+            </span>
+          ) : (
+            clean[2] || 'JUMAT'
+          )}
+        </td>
+        <td colSpan={3} className="p-2 border-r-2 border-b border-[#E0DCD0] text-center text-neutral-300">
+          ·
+        </td>
+      </>
+    );
+  }
+
+  // 9. HARIAN PUKUL / JAM row:
+  if (!isMingguanSection && (rowLabel === 'PUKUL' || rowLabel === 'JAM')) {
+    const isLive1 = isSlotLiveMass('HARIAN', 1, sheet);
+    const isLive2 = isSlotLiveMass('HARIAN', 2, sheet);
+    return (
+      <>
+        <td className="p-2 border-r-2 border-b border-[#E0DCD0] bg-[#F5F3EC] font-black text-center text-[#1E1E1E]">
+          {rowLabel}
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold ${isLive1 ? 'bg-[#FEF9C3]' : 'bg-white'} text-[#1E1E1E]`}>
+          {clean[1] || '05:30'}
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold ${isLive2 ? 'bg-[#FEF9C3]' : 'bg-white'} text-[#1E1E1E]`}>
+          {clean[2] || '05:30'}
+        </td>
+        <td colSpan={3} className="p-2 border-r-2 border-b border-[#E0DCD0] text-center text-neutral-300">
+          ·
+        </td>
+      </>
+    );
+  }
+
+  // 10. HARIAN PJ & ANGGOTA rows:
+  if (!isMingguanSection && (rowLabel === 'PJ' || rowLabel === 'ANGGOTA')) {
+    const isLive1 = isSlotLiveMass('HARIAN', 1, sheet);
+    const isLive2 = isSlotLiveMass('HARIAN', 2, sheet);
+    return (
+      <>
+        <td className="p-2 border-r-2 border-b border-[#E0DCD0] bg-[#F5F3EC] font-black text-center text-[#1E1E1E]">
+          {rowLabel}
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold ${isLive1 ? 'bg-[#FEF3C7]' : 'bg-[#E3EBDD]/50'} text-[#1E1E1E]`}>
+          {clean[1] || '{ptgs}'}
+        </td>
+        <td className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center font-bold ${isLive2 ? 'bg-[#FEF3C7]' : 'bg-[#E3EBDD]/50'} text-[#1E1E1E]`}>
+          {clean[2] || '{ptgs}'}
+        </td>
+        <td colSpan={3} className="p-2 border-r-2 border-b border-[#E0DCD0] text-center text-neutral-300">
+          ·
+        </td>
+      </>
+    );
+  }
+
+  // 11. General rows (Mingguan PUKUL, PJ, ANGGOTA)
   return (
     <>
       {clean.map((val, cIdx) => {
         const isLabelCol = cIdx === 0;
         const isPlaceholder = val.startsWith('{') && val.endsWith('}');
+        const isLive = cIdx > 0 && isSlotLiveMass(isMingguanSection ? 'MINGGUAN' : 'HARIAN', cIdx, sheet);
+
+        let cellBg = 'bg-white';
+        if (isLabelCol) {
+          cellBg = 'font-black bg-[#F5F3EC] text-[#1E1E1E]';
+        } else if (isLive) {
+          if (rowLabel === 'PUKUL' || rowLabel === 'JAM') cellBg = 'bg-[#FEF9C3] font-bold text-[#1E1E1E]';
+          else if (rowLabel === 'PJ' || rowLabel === 'ANGGOTA') cellBg = 'bg-[#FEF3C7] font-bold text-[#1E1E1E]';
+          else cellBg = 'bg-[#FFFBEB] font-bold text-[#1E1E1E]';
+        } else if (isPlaceholder) {
+          cellBg = isMingguanSection
+            ? 'bg-[#DCE6F2]/50 font-bold text-[#1E1E1E]'
+            : 'bg-[#E3EBDD]/40 font-bold text-[#1E1E1E]';
+        } else if (val) {
+          cellBg = 'font-bold text-[#1E1E1E]';
+        } else {
+          cellBg = 'text-neutral-300';
+        }
 
         return (
           <td
             key={`cell-${cIdx}`}
-            className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${
-              isLabelCol
-                ? 'font-black bg-[#F5F3EC] text-[#1E1E1E]'
-                : isPlaceholder
-                ? 'bg-[#E3EBDD]/40 font-bold text-[#1E1E1E]'
-                : val
-                ? 'font-bold text-[#1E1E1E]'
-                : 'text-neutral-300'
-            }`}
+            className={`p-2 border-r-2 border-b border-[#E0DCD0] text-center ${cellBg}`}
           >
             {val || '·'}
           </td>
@@ -386,8 +456,14 @@ function renderTabularRowCells(row: string[], columns: string[], rIdx: number) {
   );
 }
 
-export default function DatasetFilesView({ onBack }: DatasetFilesViewProps) {
-  const [sheetUrl, setSheetUrl] = useState<string>(() => {
+export default function DatasetFilesView({ 
+  onBack,
+  sheetsData: propSheetsData,
+  setSheetsData: propSetSheetsData,
+  sheetUrl: propSheetUrl,
+  setSheetUrl: propSetSheetUrl,
+}: DatasetFilesViewProps) {
+  const [internalSheetUrl, setInternalSheetUrl] = useState<string>(() => {
     try {
       const saved = localStorage.getItem('jadwalin_spreadsheet_url');
       return saved !== null && saved !== '' ? saved : DEFAULT_SPREADSHEET_URL;
@@ -396,7 +472,19 @@ export default function DatasetFilesView({ onBack }: DatasetFilesViewProps) {
     }
   });
 
-  const [sheetsData, setSheetsData] = useState<{ [key: string]: SheetTable }>(initialSheets);
+  const sheetUrl = propSheetUrl !== undefined ? propSheetUrl : internalSheetUrl;
+  const setSheetUrl = (val: string) => {
+    setInternalSheetUrl(val);
+    if (propSetSheetUrl) propSetSheetUrl(val);
+  };
+
+  const [internalSheetsData, setInternalSheetsData] = useState<{ [key: string]: SheetTable }>(initialSheets);
+  const sheetsData = propSheetsData || internalSheetsData;
+  const setSheetsData = (updater: React.SetStateAction<{ [key: string]: SheetTable }>) => {
+    setInternalSheetsData(updater);
+    if (propSetSheetsData) propSetSheetsData(updater);
+  };
+
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [showDoneToast, setShowDoneToast] = useState<boolean>(false);
   
@@ -455,6 +543,9 @@ export default function DatasetFilesView({ onBack }: DatasetFilesViewProps) {
                 updated[key] = {
                   ...incoming,
                   columns: ['A', 'B', 'C', 'D', 'E', 'F'],
+                  yellowCells: incoming.yellowCells || prev[key]?.yellowCells,
+                  liveSlots: incoming.liveSlots || prev[key]?.liveSlots,
+                  liveColumns: incoming.liveColumns || prev[key]?.liveColumns,
                   rows: incoming.rows.map((r) => {
                     const trimmed = r.slice(0, 6);
                     return trimmed.length < 6
@@ -647,11 +738,13 @@ export default function DatasetFilesView({ onBack }: DatasetFilesViewProps) {
                   </span>
                   
                   <div className="w-7 h-7 bg-[#1E1E1E] text-white flex items-center justify-center shrink-0">
-                    {isOpen ? (
-                      <ChevronDown className="w-4 h-4" strokeWidth={2.6} />
-                    ) : (
+                    <motion.div
+                      animate={{ rotate: isOpen ? 90 : 0 }}
+                      transition={{ duration: 0.2, ease: 'easeInOut' }}
+                      className="flex items-center justify-center"
+                    >
                       <ChevronRight className="w-4 h-4" strokeWidth={2.6} />
-                    )}
+                    </motion.div>
                   </div>
                 </button>
 
@@ -713,7 +806,7 @@ export default function DatasetFilesView({ onBack }: DatasetFilesViewProps) {
                                         - DATASET: clean tabular row cells (pure black text)
                                     */}
                                     {isTemplateTab
-                                      ? renderTemplateRowCells(row)
+                                      ? renderTemplateRowCells(row, rIdx, sheet.rows, sheet)
                                       : isConfigOrParam
                                       ? renderConfigParameterRowCells(row, totalCols)
                                       : renderTabularRowCells(row, sheet.columns, rIdx)}
